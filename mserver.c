@@ -118,6 +118,8 @@ typedef struct _server_node {
 	// TODO: add fields for necessary additional server state information
 	// ...
 
+	struct timeval last_heartbeat;
+
 } server_node;
 
 // Total number of servers
@@ -170,6 +172,7 @@ static bool read_config_file()
 		node->socket_fd_in = -1;
 		node->socket_fd_out = -1;
 		node->pid = 0;
+		gettimeofday(&node->last_heartbeat, NULL);
 	}
 
 	// Print server configuration
@@ -488,6 +491,18 @@ static bool process_server_message(int fd)
 		return false;
 	}
 
+	switch (request.type) {
+		case HEARTBEAT: {
+			int sid = request.server_id;
+			gettimeofday(&server_nodes[sid].last_heartbeat, NULL);
+			break;
+		}
+
+		default:
+			log_error("Invalid control request\n");
+			return false;
+	}
+
 	return true;
 }
 
@@ -563,6 +578,14 @@ static bool run_mserver_loop()
 		// within the timeout interval. Keep information in the server_node structure regarding when was the last
 		// heartbeat received from a server and compare to current time. Initiate recovery if discovered a failure.
 		// ...
+
+		struct timeval current_time = {0};
+		gettimeofday(&current_time, NULL);
+		for (int i = 0; i < num_servers; i++) {
+			if ((current_time.tv_sec - server_nodes[i].last_heartbeat.tv_sec) > server_timeout) {
+				log_error("Server %d has timed out\n", i);
+			}
+		}
 
 		if (num_ready_fds <= 0) {
 			continue;
