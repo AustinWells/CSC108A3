@@ -4,9 +4,10 @@ import os
 import subprocess
 
 if __name__ == "__main__":
-    os.remove("./server_0.log")
-    os.remove("./server_1.log")
-    os.remove("./server_2.log")
+
+    for file in os.listdir():
+        if file.endswith(".log"):
+            os.remove(file)
 
     #./mserver -c 1111 -s 2222 -C ./srvcfg_local.txt
     mserver = subprocess.Popen(["./mserver",
