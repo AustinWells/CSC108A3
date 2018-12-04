@@ -112,6 +112,9 @@ static int server_fd_table[MAX_SERVER_SESSIONS] = { -1, -1 };
 // Storage for primary key set
 hash_table primary_hash = {0};
 
+// Storage for secondary key set
+hash_table secondary_hash = {0};
+
 // Primary server (the one that stores the primary copy for this server's secondary key set)
 static int primary_sid = -1;
 static int primary_fd = -1;
@@ -157,7 +160,8 @@ static bool init_server()
 	secondary_sid = secondary_server_id(server_id, num_servers);
 
 	// Initialize key-value storage
-	if (!hash_init(&primary_hash, hash_size)) {
+	if (!hash_init(&primary_hash, hash_size) ||
+	    !hash_init(&secondary_hash, hash_size)) {
 		goto cleanup;
 	}
 
@@ -206,6 +210,8 @@ static void cleanup()
 	hash_iterate(&primary_hash, clean_iterator_f, NULL);
 	hash_cleanup(&primary_hash);
 
+	hash_iterate(&secondary_hash, clean_iterator_f, NULL);
+	hash_cleanup(&secondary_hash);	
 	// TODO: release all other resources
 	// ...
 
@@ -303,7 +309,13 @@ static void process_client_message(int fd)
 			replicate_request->type = OP_PUT;
 			memcpy(replicate_request->value, value_copy, value_size);
 
-			send_msg(secondary_fd, replicate_request, sizeof(*replicate_request) + value_size);
+			char recv_buffer[MAX_MSG_LEN] = {0};
+			if (!send_msg(secondary_fd, replicate_request, sizeof(*replicate_request) + value_size) ||
+			    !recv_msg(secondary_fd, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP))
+			{
+				log_error("sid %d: Replication to %d failed\n", server_id, secondary_sid);
+				return;
+			}
 
 			// Need to free the old value (if there was any)
 			if (old_value != NULL) {
@@ -345,6 +357,58 @@ static bool process_server_message(int fd)
 
 	// TODO: process the message and send the response
 	// ...
+
+	// Initialize the response
+	char resp_buffer[MAX_MSG_LEN] = {0};
+	operation_response *response = (operation_response*)resp_buffer;
+	response->hdr.type = MSG_OPERATION_RESP;
+	uint16_t value_sz = 0;
+
+	switch (request->type) {
+		case OP_GET: {
+			log_error("process_server_message() OP_GET not implemented");
+			return false;
+		}
+
+		case OP_PUT: {
+			// Need to copy the value to dynamically allocated memory
+			size_t value_size = request->hdr.length - sizeof(*request);
+			void *value_copy = malloc(value_size);
+			if (value_copy == NULL) {
+				log_perror("malloc");
+				log_error("sid %d: Out of memory\n", server_id);
+				response->status = OUT_OF_SPACE;
+				break;
+			}
+			memcpy(value_copy, request->value, value_size);
+
+			void *old_value = NULL;
+			size_t old_value_sz = 0;
+
+			// Put the <key, value> pair into the hash table
+			if (!hash_put(&secondary_hash, request->key, value_copy, value_size, &old_value, &old_value_sz))
+			{
+				log_error("sid %d: Out of memory\n", server_id);
+				free(value_copy);
+				response->status = OUT_OF_SPACE;
+				break;
+			}
+
+			// Need to free the old value (if there was any)
+			if (old_value != NULL) {
+				free(old_value);
+			}
+
+			response->status = SUCCESS;
+			break;
+		}
+
+		default:
+			log_error("sid %d: Invalid client operation type\n", server_id);
+			return false;
+	}
+
+	send_msg(fd, response, sizeof(*response) + value_sz);
 
 	return true;
 }
@@ -498,9 +562,12 @@ static bool run_server_loop()
 		// Check for any messages from connected servers
 		for (int i = 0; i < MAX_SERVER_SESSIONS; i++) {
 			if ((server_fd_table[i] != -1) && FD_ISSET(server_fd_table[i], &rset)) {
-				process_server_message(server_fd_table[i]);
-				FD_CLR(server_fd_table[i], &allset);
-				close_safe(&(server_fd_table[i]));
+				if (!process_server_message(server_fd_table[i])) {
+					// Received an invalid message, close the connection
+					log_error("sid %d: Closing server connection\n", server_id);
+					FD_CLR(server_fd_table[i], &allset);
+					close_safe(&(server_fd_table[i]));
+				}
 
 				if (--num_ready_fds <= 0) {
 					break;
