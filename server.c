@@ -429,7 +429,7 @@ static bool process_server_message(int fd)
 		}
 
 		default:
-			log_error("sid %d: Invalid client operation type\n", server_id);
+			log_error("sid %d: Invalid server operation type\n", server_id);
 			return false;
 	}
 
