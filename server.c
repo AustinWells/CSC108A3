@@ -296,6 +296,11 @@ static void process_client_message(int fd)
 			// TODO: forward the PUT request to the secondary replica
 			// ...
 
+			// char replicate_request_buffer[MAX_MSG_LEN] = {0};
+			// server_ctrl_request *replicate_request = (server_ctrl_request *)replicate_request_buffer;
+			// replicate_request->hdr.type = MSG_SERVER_CTRL_REQ;
+			// request->type =
+
 			// Need to free the old value (if there was any)
 			if (old_value != NULL) {
 				free(old_value);
@@ -392,6 +397,7 @@ static bool run_server_loop()
 	FD_ZERO(&allset);
 	FD_SET(my_clients_fd, &allset);
 	FD_SET(my_mservers_fd, &allset);
+	FD_SET(my_servers_fd, &allset);
 
 	int maxfd = max(my_clients_fd, my_mservers_fd);
 
@@ -471,7 +477,36 @@ static bool run_server_loop()
 				}
 			}
 		}
+
+		// Incoming connection from a server
+		if (FD_ISSET(my_servers_fd, &rset)) {
+			int fd_idx = accept_connection(my_servers_fd, server_fd_table, MAX_SERVER_SESSIONS);
+			if (fd_idx >= 0) {
+				FD_SET(server_fd_table[fd_idx], &allset);
+				maxfd = max(maxfd, server_fd_table[fd_idx]);
+			}
+
+			if (--num_ready_fds <= 0) {
+				continue;
+			}
+		}
+
+		// Check for any messages from connected servers
+		for (int i = 0; i < MAX_SERVER_SESSIONS; i++) {
+			if ((server_fd_table[i] != -1) && FD_ISSET(server_fd_table[i], &rset)) {
+				process_server_message(server_fd_table[i]);
+				FD_CLR(server_fd_table[i], &allset);
+				close_safe(&(server_fd_table[i]));
+
+				if (--num_ready_fds <= 0) {
+					break;
+				}
+			}
+		}
 	}
+
+	// Should not get here
+	return false;
 }
 
 
