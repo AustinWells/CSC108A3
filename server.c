@@ -296,10 +296,14 @@ static void process_client_message(int fd)
 			// TODO: forward the PUT request to the secondary replica
 			// ...
 
-			// char replicate_request_buffer[MAX_MSG_LEN] = {0};
-			// server_ctrl_request *replicate_request = (server_ctrl_request *)replicate_request_buffer;
-			// replicate_request->hdr.type = MSG_SERVER_CTRL_REQ;
-			// request->type =
+			char replicate_request_buffer[MAX_MSG_LEN] = {0};
+			operation_request *replicate_request = (operation_request *)replicate_request_buffer;
+			replicate_request->hdr.type = MSG_OPERATION_REQ;
+			memcpy(replicate_request->key, request->key, KEY_SIZE);
+			replicate_request->type = OP_PUT;
+			memcpy(replicate_request->value, value_copy, value_size);
+
+			send_msg(secondary_fd, replicate_request, sizeof(*replicate_request) + value_size);
 
 			// Need to free the old value (if there was any)
 			if (old_value != NULL) {
