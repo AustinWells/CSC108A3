@@ -483,10 +483,13 @@ static bool process_server_message(int fd)
 
 	// TODO: read and process the message
 	// ...
-	(void)fd;
-	return false;
-}
+	mserver_ctrl_request request = {0};
+	if (!recv_msg(fd, &request, sizeof(request), MSG_MSERVER_CTRL_REQ)) {
+		return false;
+	}
 
+	return true;
+}
 
 static const int select_timeout_interval = 1;// seconds
 
