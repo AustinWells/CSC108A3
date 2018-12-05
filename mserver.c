@@ -123,8 +123,8 @@ typedef struct _server_node {
 
 	struct timeval last_heartbeat;
 	bool is_redirecting; 
-	int primary_conf; //if update primary has finished
-	int secondary_conf; //if update secoundary has finished
+	bool primary_conf; //if update primary has finished
+	bool secondary_conf; //if update secoundary has finished
 
 } server_node;
 
@@ -494,8 +494,6 @@ static bool process_server_message(int fd)
 {
 	log_write("%s Receiving a server message\n", current_time_str());
 
-	// TODO: read and process the message
-	// ...
 	mserver_ctrl_request request = {0};
 	if (!recv_msg(fd, &request, sizeof(request), MSG_MSERVER_CTRL_REQ)) {
 		return false;
@@ -508,16 +506,22 @@ static bool process_server_message(int fd)
 			break;
 		}
 		case UPDATED_PRIMARY: {
-			server_nodes[failed_server].primary_conf = 0;
-			if(server_nodes[failed_server].secondary_conf == 0){
+			server_nodes[failed_server].primary_conf = true;
+			if(server_nodes[failed_server].secondary_conf == true){
 				//TODO send SWITCH-PRIMARY
+                server_nodes[failed_server].is_redirecting = false;
+                log_write("Server %d has been recovered\n", failed_server);
+                failed_server = -1;
 			}
 			break;
 		}
 		case UPDATED_SECONDARY: {
-			server_nodes[failed_server].secondary_conf = 0;
-			if(server_nodes[failed_server].primary_conf == 0){
+			server_nodes[failed_server].secondary_conf = true;
+			if(server_nodes[failed_server].primary_conf == true){
 				//TODO send SWITCH-PRIMARY
+                server_nodes[failed_server].is_redirecting = false;
+                log_write("Server %d has been recovered\n", failed_server);
+                failed_server = -1;
 			}
 			break;
 		}
@@ -611,9 +615,12 @@ static bool run_mserver_loop()
 				FD_CLR(server_nodes[i].socket_fd_in, &allset);
 				close_safe(&server_nodes[i].socket_fd_in);
 
-				if(spawn_server(i) < 0) {
+				if((spawn_server(i) < 0) ||
+                   !send_set_secondary(i)){
 					log_error("Spawning Sever %d failed \n", i);
 				}
+
+                failed_server = i;
 
 				FD_SET(server_nodes[i].socket_fd_in, &allset);
 				max_server_fd = max(max_server_fd, server_nodes[i].socket_fd_in);
@@ -643,8 +650,7 @@ static bool run_mserver_loop()
 				{
 					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", secondary_node->sid);
 				}
-				
-				server_nodes[i].is_redirecting = true;
+                server_nodes[i].secondary_conf = false;
 
 				request->hdr.type = MSG_SERVER_CTRL_REQ;
 				request->type = UPDATE_SECONDARY;
@@ -656,7 +662,9 @@ static bool run_mserver_loop()
 				{
 					log_error("sid %d: failed to response to UPDATE_SECONDARY\n", primary_node->sid);
 				}
+                server_nodes[i].primary_conf = false;
 				
+				server_nodes[i].is_redirecting = true;
 			}	
 		}
 
