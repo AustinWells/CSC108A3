@@ -371,7 +371,7 @@ static void process_client_message(int fd)
 				hash_unlock(table, request->key);
 				break;
 			}
-
+			
 			char replicate_request_buffer[MAX_MSG_LEN] = {0};
 			operation_request *replicate_request = (operation_request *)replicate_request_buffer;
 			replicate_request->hdr.type = MSG_OPERATION_REQ;
@@ -380,13 +380,11 @@ static void process_client_message(int fd)
 			replicate_request->sid = server_id;
 			memcpy(replicate_request->value, value_copy, value_size);
 
-			int fd = (table == &primary_hash) ? secondary_fd : primary_fd;
+			int replica_fd = (table == &primary_hash) ? secondary_fd : primary_fd;
 
-			char recv_buffer[MAX_MSG_LEN] = {0};
-			if (!send_msg(fd, replicate_request, sizeof(*replicate_request) + value_size) ||
-			    !recv_msg(fd, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP))
+			if (!send_msg(replica_fd, replicate_request, sizeof(*replicate_request) + value_size))
 			{
-				log_error("sid %d: Replication to %d failed\n", server_id, fd);
+				log_error("sid %d: Replication to %d failed\n", server_id, replica_fd);
 				hash_unlock(table, request->key);
 				return;
 			}
@@ -526,25 +524,27 @@ static bool process_mserver_message(int fd, bool *shutdown_requested)
 			return true;
 
 		case UPDATE_PRIMARY:
+			close_safe(&primary_fd);
 			response.status = ((primary_fd = connect_to_server(request->host_name, request->port)) < 0)
 			                ? CTRLREQ_FAILURE : CTRLREQ_SUCCESS;
 
 			if (response.status != CTRLREQ_FAILURE) {
 				update_primary = true;
-				pthread_t sync_primary_thread;
-				pthread_create(&sync_primary_thread, NULL, sync_hashtable, NULL);
+				// pthread_t sync_primary_thread;
+				// pthread_create(&sync_primary_thread, NULL, sync_hashtable, NULL);
 			}
 
 			break;
 
 		case UPDATE_SECONDARY:
+			close_safe(&secondary_fd);
 			response.status = ((secondary_fd = connect_to_server(request->host_name, request->port)) < 0)
 			                ? CTRLREQ_FAILURE : CTRLREQ_SUCCESS;
 
 			if (response.status != CTRLREQ_FAILURE) {
 				update_primary = false;
-				pthread_t sync_secondary_thread;
-				pthread_create(&sync_secondary_thread, NULL, sync_hashtable, NULL);
+				// pthread_t sync_secondary_thread;
+				// pthread_create(&sync_secondary_thread, NULL, sync_hashtable, NULL);
 			}
 
 			break;

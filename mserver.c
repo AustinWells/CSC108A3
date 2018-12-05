@@ -608,11 +608,18 @@ static bool run_mserver_loop()
 			if ((current_time.tv_sec - server_nodes[i].last_heartbeat.tv_sec) > server_timeout) {
 				log_error("Server %d has timed out\n", i);
 
-				failed_server = i;
+				FD_CLR(server_nodes[i].socket_fd_in, &allset);
+				close_safe(&server_nodes[i].socket_fd_in);
 
-				if(spawn_server(i) < 0){
+				if(spawn_server(i) < 0) {
 					log_error("Spawning Sever %d failed \n", i);
 				}
+
+				FD_SET(server_nodes[i].socket_fd_in, &allset);
+				max_server_fd = max(max_server_fd, server_nodes[i].socket_fd_in);
+				maxfd = max(maxfd,  max_server_fd);
+
+				gettimeofday(&server_nodes[i].last_heartbeat, NULL);
 
 				server_node *secondary_node = &(server_nodes[secondary_server_id(i, num_servers)]);
 				server_node *primary_node = &(server_nodes[primary_server_id(i, num_servers)]);
@@ -630,21 +637,24 @@ static bool run_mserver_loop()
 				int host_name_len = strlen(host) + 1;
 				strncpy(request->host_name, host, host_name_len);
 
-				server_ctrl_response response = {0};			
+				server_ctrl_response secondary_response = {0};			
 				if (!send_msg(secondary_node->socket_fd_out, request, sizeof(*request) + host_name_len) ||
-			        !recv_msg(secondary_node->socket_fd_out, &response, sizeof(response), MSG_MSERVER_CTRL_REQ))
+			        !recv_msg(secondary_node->socket_fd_out, &secondary_response, sizeof(secondary_response), MSG_SERVER_CTRL_RESP))
 				{
-					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
+					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", secondary_node->sid);
 				}
 				
 				server_nodes[i].is_redirecting = true;
 
+				request->hdr.type = MSG_SERVER_CTRL_REQ;
 				request->type = UPDATE_SECONDARY;
+				request->port = server_nodes[i].sport;
 
+				server_ctrl_response primary_response = {0};
 				if (!send_msg(primary_node->socket_fd_out, request, sizeof(*request) + host_name_len) ||
-			        !recv_msg(primary_node->socket_fd_in, &response, sizeof(response), MSG_MSERVER_CTRL_REQ))
+			        !recv_msg(primary_node->socket_fd_out, &primary_response, sizeof(primary_response), MSG_SERVER_CTRL_RESP))
 				{
-					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
+					log_error("sid %d: failed to response to UPDATE_SECONDARY\n", primary_node->sid);
 				}
 				
 			}	
