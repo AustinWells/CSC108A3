@@ -122,6 +122,8 @@ typedef struct _server_node {
 	struct timeval last_heartbeat;
 	//0 if not redirecting, otherwise 1 if redirecting
 	int is_redirecting; 
+	int primary_conf; //if update primary has finished
+	int secondary_conf; //if update secoundary has finished
 
 } server_node;
 
@@ -502,7 +504,12 @@ static bool process_server_message(int fd)
 			gettimeofday(&server_nodes[sid].last_heartbeat, NULL);
 			break;
 		}
-
+		case UPDATED_PRIMARY: {
+			break;
+		}
+		case UPDATED_SECONDARY: {
+			break;
+		}
 		default:
 			log_error("Invalid control request\n");
 			return false;
@@ -601,7 +608,7 @@ static bool run_mserver_loop()
 				server_ctrl_request *request = (server_ctrl_request*)buffer;
 
 				request->hdr.type = MSG_SERVER_CTRL_REQ;
-				request->hdr.magic = HDR_MAGIC;
+				//request->hdr.magic = HDR_MAGIC;
 				request->type = UPDATE_PRIMARY;
 				
 				strncpy(request->host_name, server_nodes[i].host_name, HOST_NAME_MAX);
