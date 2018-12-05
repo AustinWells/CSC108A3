@@ -591,55 +591,45 @@ static bool run_mserver_loop()
 		// heartbeat received from a server and compare to current time. Initiate recovery if discovered a failure.
 		// ...
 
-		int err;
-
 		struct timeval current_time = {0};
 		gettimeofday(&current_time, NULL);
 		for (int i = 0; i < num_servers; i++) {
 			if ((current_time.tv_sec - server_nodes[i].last_heartbeat.tv_sec) > server_timeout) {
 				log_error("Server %d has timed out\n", i);
-				server_nodes[i].is_redirecting = 1; //forward all request
 				
-				if((err = spawn_server(i)) < 0){
-					log_error("Spawning Sever %d failed with error %d\n", i, err);
+				if(spawn_server(i) < 0){
+					log_error("Spawning Sever %d failed \n", i);
 				}
-				//TODO restore keys
+
+				server_node *secondary_node = &(server_nodes[secondary_server_id(i, num_servers)]);
+				server_node *primary_node = &(server_nodes[primary_server_id(i, num_servers)]);
+
 				char buffer[MAX_MSG_LEN] = {0};
 				server_ctrl_request *request = (server_ctrl_request*)buffer;
 
 				request->hdr.type = MSG_SERVER_CTRL_REQ;
-				//request->hdr.magic = HDR_MAGIC;
 				request->type = UPDATE_PRIMARY;
-				
-				strncpy(request->host_name, server_nodes[i].host_name, HOST_NAME_MAX);
-				request->hdr.length = strlen(request->host_name);
+				request->port = server_nodes[i].sport;
 
+				char *at = strchr(server_nodes[i].host_name, '@');
+				char *host = (at == NULL) ? server_nodes[i].host_name : (at + 1);
 
-				server_node *secondary_node = &(server_nodes[secondary_server_id(i, num_servers)]);
-				request->port = secondary_node->sport;
+				int host_name_len = strlen(host) + 1;
+				strncpy(request->host_name, host, host_name_len);
 
-				char recv_buffer[MAX_MSG_LEN] = {0};
-
-				//TODO Double check that this is correct
-				
-				if (!send_msg(server_nodes[i].socket_fd_out, request, sizeof(*request) + request->hdr.length + 1) ||
-			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), MSG_MSERVER_CTRL_REQ))
+				server_ctrl_response response = {0};			
+				if (!send_msg(secondary_node->socket_fd_out, request, sizeof(*request) + host_name_len) ||
+			        !recv_msg(secondary_node->socket_fd_out, &response, sizeof(response), MSG_MSERVER_CTRL_REQ))
 				{
 					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
 				}
+				
+				server_nodes[i].is_redirecting = 1; //forward all request
 
-				request->hdr.type = MSG_SERVER_CTRL_REQ;
-				request->hdr.magic = HDR_MAGIC;
 				request->type = UPDATE_SECONDARY;
 
-				strncpy(request->host_name, server_nodes[i].host_name, HOST_NAME_MAX);
-				request->hdr.length = strlen(request->host_name);
-
-				server_node *primary_node = &(server_nodes[primary_server_id(i, num_servers)]);
-				request->port = primary_node->sport;
-
-				if (!send_msg(server_nodes[i].socket_fd_out, request, sizeof(*request) + request->hdr.length + 1) ||
-			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), MSG_MSERVER_CTRL_REQ))
+				if (!send_msg(primary_node->socket_fd_out, request, sizeof(*request) + host_name_len) ||
+			        !recv_msg(primary_node->socket_fd_in, &response, sizeof(response), MSG_MSERVER_CTRL_REQ))
 				{
 					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
 				}
