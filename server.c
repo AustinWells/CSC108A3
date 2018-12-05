@@ -154,9 +154,6 @@ void sync_kv(const char key[KEY_SIZE], void *value, size_t value_sz, void *args)
 	(void)args;
 
 	int fd = update_primary ? primary_fd : secondary_fd;
-	hash_table *table = update_primary ? &primary_hash : &secondary_hash;
-
-	hash_lock(table, key);
 
 	char replicate_request_buffer[MAX_MSG_LEN] = {0};
 	operation_request *replicate_request = (operation_request *)replicate_request_buffer;
@@ -171,15 +168,13 @@ void sync_kv(const char key[KEY_SIZE], void *value, size_t value_sz, void *args)
 	    !recv_msg(fd, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP)) {
 		log_error("%d sid: asynchronous update failed\n", server_id);
 	}
-
-	hash_unlock(table, key);
 }
 
 void *sync_hashtable(void *args)
 {
 	(void)args;
 
-	hash_table *table = update_primary ? &primary_hash : &secondary_hash;
+	hash_table *table = update_primary ? &secondary_hash : &primary_hash;
 	hash_iterate(table, sync_kv, NULL);
 
 	mserver_ctrl_request request = {0};
@@ -189,7 +184,7 @@ void *sync_hashtable(void *args)
 
 	if (!send_msg(mserver_fd_out, &request, sizeof(request)))
 	{
-		log_error("sid %d: Failed to send heartbeat\n", server_id);
+		log_error("sid %d: Failed to notify mserver that the async update finished\n", server_id);
 	}
 
 	pthread_exit(NULL);
@@ -515,6 +510,7 @@ static bool process_mserver_message(int fd, bool *shutdown_requested)
 	// Process the request based on its type
 	switch (request->type) {
 		case SET_SECONDARY:
+			close_safe(&secondary_fd);
 			response.status = ((secondary_fd = connect_to_server(request->host_name, request->port)) < 0)
 			                ? CTRLREQ_FAILURE : CTRLREQ_SUCCESS;
 			break;
@@ -530,8 +526,8 @@ static bool process_mserver_message(int fd, bool *shutdown_requested)
 
 			if (response.status != CTRLREQ_FAILURE) {
 				update_primary = true;
-				// pthread_t sync_primary_thread;
-				// pthread_create(&sync_primary_thread, NULL, sync_hashtable, NULL);
+				pthread_t sync_primary_thread;
+				pthread_create(&sync_primary_thread, NULL, sync_hashtable, NULL);
 			}
 
 			break;
@@ -543,8 +539,8 @@ static bool process_mserver_message(int fd, bool *shutdown_requested)
 
 			if (response.status != CTRLREQ_FAILURE) {
 				update_primary = false;
-				// pthread_t sync_secondary_thread;
-				// pthread_create(&sync_secondary_thread, NULL, sync_hashtable, NULL);
+				pthread_t sync_secondary_thread;
+				pthread_create(&sync_secondary_thread, NULL, sync_hashtable, NULL);
 			}
 
 			break;
