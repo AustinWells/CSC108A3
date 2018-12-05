@@ -55,6 +55,8 @@ static int server_timeout = 0;
 // Log file name
 static char log_file_name[PATH_MAX] = "";
 
+// the server that Failed us
+static int failed_server = -1;
 
 static void usage(char **argv)
 {
@@ -506,9 +508,17 @@ static bool process_server_message(int fd)
 			break;
 		}
 		case UPDATED_PRIMARY: {
+			server_nodes[failed_server].primary_conf = 0;
+			if(server_nodes[failed_server].secondary_conf == 0){
+				//TODO send SWITCH-PRIMARY
+			}
 			break;
 		}
 		case UPDATED_SECONDARY: {
+			server_nodes[failed_server].secondary_conf = 0;
+			if(server_nodes[failed_server].primary_conf == 0){
+				//TODO send SWITCH-PRIMARY
+			}
 			break;
 		}
 		default:
@@ -597,7 +607,9 @@ static bool run_mserver_loop()
 		for (int i = 0; i < num_servers; i++) {
 			if ((current_time.tv_sec - server_nodes[i].last_heartbeat.tv_sec) > server_timeout) {
 				log_error("Server %d has timed out\n", i);
-				
+
+				failed_server = i;
+
 				if(spawn_server(i) < 0){
 					log_error("Spawning Sever %d failed \n", i);
 				}
