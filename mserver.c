@@ -402,7 +402,7 @@ static bool send_set_secondary(int sid)
 	request->hdr.type = MSG_SERVER_CTRL_REQ;
 	request->type = SET_SECONDARY;
 	server_node *secondary_node = &(server_nodes[secondary_server_id(sid, num_servers)]);
-	request->port = secondary_node->sport;
+	request->port  = secondary_node->sport;
 
 	// Extract the host name from "user@host"
 	char *at = strchr(secondary_node->host_name, '@');
@@ -591,6 +591,8 @@ static bool run_mserver_loop()
 		for (int i = 0; i < num_servers; i++) {
 			if ((current_time.tv_sec - server_nodes[i].last_heartbeat.tv_sec) > server_timeout) {
 				log_error("Server %d has timed out\n", i);
+				server_nodes[i].is_redirecting = 1; //forward all request
+				
 				if((err = spawn_server(i)) < 0){
 					log_error("Spawning Sever %d failed with error %d\n", i, err);
 				}
@@ -599,29 +601,42 @@ static bool run_mserver_loop()
 				server_ctrl_request *request = (server_ctrl_request*)buffer;
 
 				request->hdr.type = MSG_SERVER_CTRL_REQ;
+				request->hdr.magic = HDR_MAGIC;
 				request->type = UPDATE_PRIMARY;
+				
+				strncpy(request->host_name, server_nodes[i].host_name, HOST_NAME_MAX);
+				request->hdr.length = strlen(request->host_name);
+
+
 				server_node *secondary_node = &(server_nodes[secondary_server_id(i, num_servers)]);
 				request->port = secondary_node->sport;
 
 				char recv_buffer[MAX_MSG_LEN] = {0};
+
 				//TODO Double check that this is correct
-				if (!send_msg(server_nodes[i].socket_fd_out, request, sizeof(request)) ||
-			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), UPDATE_PRIMARY))
+				
+				if (!send_msg(server_nodes[i].socket_fd_out, request, sizeof(*request) + request->hdr.length + 1) ||
+			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), MSG_MSERVER_CTRL_REQ))
 				{
 					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
 				}
-				server_nodes[i].is_redirecting = 1; //forward all request
 
 				request->hdr.type = MSG_SERVER_CTRL_REQ;
+				request->hdr.magic = HDR_MAGIC;
 				request->type = UPDATE_SECONDARY;
+
+				strncpy(request->host_name, server_nodes[i].host_name, HOST_NAME_MAX);
+				request->hdr.length = strlen(request->host_name);
+
 				server_node *primary_node = &(server_nodes[primary_server_id(i, num_servers)]);
 				request->port = primary_node->sport;
 
-				if (!send_msg(server_nodes[i].socket_fd_out, request, sizeof(request)) ||
-			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), UPDATE_SECONDARY))
+				if (!send_msg(server_nodes[i].socket_fd_out, request, sizeof(*request) + request->hdr.length + 1) ||
+			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), MSG_MSERVER_CTRL_REQ))
 				{
 					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
 				}
+				
 			}	
 		}
 
