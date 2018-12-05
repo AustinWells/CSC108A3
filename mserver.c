@@ -33,6 +33,7 @@
 
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 
 #include "defs.h"
 #include "util.h"
@@ -119,6 +120,8 @@ typedef struct _server_node {
 	// ...
 
 	struct timeval last_heartbeat;
+	//0 if not redirecting, otherwise 1 if redirecting
+	int is_redirecting; 
 
 } server_node;
 
@@ -458,8 +461,10 @@ static void process_client_message(int fd)
 	// Determine which server is responsible for the requested key
 	int server_id = key_server_id(request.key, num_servers);
 
-	// TODO: redirect client requests to the secondary replica while the primary is being recovered
-	// ...
+	//redirect client requests to the secondary replica while the primary is being recovered
+	if(server_nodes[server_id].is_redirecting) {
+		server_id = secondary_server_id(server_id, num_servers);
+	}
 
 	// Fill in the response with the key-value server location information
 	char buffer[MAX_MSG_LEN] = {0};
@@ -579,14 +584,48 @@ static bool run_mserver_loop()
 		// heartbeat received from a server and compare to current time. Initiate recovery if discovered a failure.
 		// ...
 
+		int err;
+
 		struct timeval current_time = {0};
 		gettimeofday(&current_time, NULL);
 		for (int i = 0; i < num_servers; i++) {
 			if ((current_time.tv_sec - server_nodes[i].last_heartbeat.tv_sec) > server_timeout) {
 				log_error("Server %d has timed out\n", i);
-			}
+				if((err = spawn_server(i)) < 0){
+					log_error("Spawning Sever %d failed with error %d\n", i, err);
+				}
+				//TODO restore keys
+				char buffer[MAX_MSG_LEN] = {0};
+				server_ctrl_request *request = (server_ctrl_request*)buffer;
+
+				request->hdr.type = MSG_SERVER_CTRL_REQ;
+				request->type = UPDATE_PRIMARY;
+				server_node *secondary_node = &(server_nodes[secondary_server_id(i, num_servers)]);
+				request->port = secondary_node->sport;
+
+				char recv_buffer[MAX_MSG_LEN] = {0};
+				//TODO Double check that this is correct
+				if (!send_msg(server_nodes[i].socket_fd_out, request, sizeof(request)) ||
+			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP))
+				{
+					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
+				}
+				server_nodes[i].is_redirecting = 1; //forward all request
+
+				request->hdr.type = MSG_SERVER_CTRL_REQ;
+				request->type = UPDATE_SECONDARY;
+				server_node *primary_node = &(server_nodes[primary_server_id(i, num_servers)]);
+				request->port = secondary_node->sport;
+
+				if (!send_msg(server_nodes[i].socket_fd_out, request, sizeof(request)) ||
+			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP))
+				{
+					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
+				}
+			}	
 		}
 
+		//TODO ask vlad why why????
 		if (num_ready_fds <= 0) {
 			continue;
 		}

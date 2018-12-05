@@ -469,6 +469,11 @@ static bool process_mserver_message(int fd, bool *shutdown_requested)
 			*shutdown_requested = true;
 			return true;
 
+		case UPDATE_PRIMARY:
+			//TODO spawn a thread start sending gets too server
+			assert(false);
+			break;
+
 		// TODO: handle remaining message types
 		// ...
 
