@@ -606,7 +606,7 @@ static bool run_mserver_loop()
 				char recv_buffer[MAX_MSG_LEN] = {0};
 				//TODO Double check that this is correct
 				if (!send_msg(server_nodes[i].socket_fd_out, request, sizeof(request)) ||
-			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP))
+			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), UPDATE_PRIMARY))
 				{
 					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
 				}
@@ -615,10 +615,10 @@ static bool run_mserver_loop()
 				request->hdr.type = MSG_SERVER_CTRL_REQ;
 				request->type = UPDATE_SECONDARY;
 				server_node *primary_node = &(server_nodes[primary_server_id(i, num_servers)]);
-				request->port = secondary_node->sport;
+				request->port = primary_node->sport;
 
 				if (!send_msg(server_nodes[i].socket_fd_out, request, sizeof(request)) ||
-			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP))
+			    !recv_msg(server_nodes[i].socket_fd_in, recv_buffer, sizeof(recv_buffer), UPDATE_SECONDARY))
 				{
 					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
 				}
