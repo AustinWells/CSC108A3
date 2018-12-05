@@ -147,6 +147,54 @@ void *heartbeat()
 	pthread_exit(NULL);
 }
 
+static bool update_primary = false;
+
+void sync_kv(const char key[KEY_SIZE], void *value, size_t value_sz, void *args)
+{
+	(void)args;
+
+	int fd = update_primary ? primary_fd : secondary_fd;
+	hash_table table = update_primary ? primary_hash : secondary_hash;
+
+	hash_lock(&table, key);
+
+	char replicate_request_buffer[MAX_MSG_LEN] = {0};
+	operation_request *replicate_request = (operation_request *)replicate_request_buffer;
+	replicate_request->hdr.type = MSG_OPERATION_REQ;
+	memcpy(replicate_request->key, key, KEY_SIZE);
+	replicate_request->type = OP_PUT;
+	replicate_request->sid = server_id;
+	memcpy(replicate_request->value, value, value_sz);
+
+	char recv_buffer[MAX_MSG_LEN] = {0};
+	if (!send_msg(fd, replicate_request, sizeof(*replicate_request) + value_sz) ||
+	    !recv_msg(fd, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP)) {
+		log_error("%d sid: asynchronous update failed\n", server_id);
+	}
+
+	hash_unlock(&table, key);
+}
+
+void *sync_hashtable(void *args)
+{
+	(void)args;
+
+	hash_table table = update_primary ? primary_hash : secondary_hash;
+	hash_iterate(&table, sync_kv, NULL);
+
+	mserver_ctrl_request request = {0};
+	request.hdr.type = MSG_MSERVER_CTRL_REQ;
+	request.type = update_primary ? UPDATED_PRIMARY : UPDATED_SECONDARY;
+	request.server_id = server_id;
+
+	if (!send_msg(mserver_fd_out, &request, sizeof(request)))
+	{
+		log_error("sid %d: Failed to send heartbeat\n", server_id);
+	}
+
+	pthread_exit(NULL);
+}
+
 // Initialize and start the server
 static bool init_server()
 {
@@ -316,11 +364,13 @@ static void process_client_message(int fd)
 			size_t old_value_sz = 0;
 
 			// Put the <key, value> pair into the hash table
+			hash_lock(&primary_hash, request->key);
 			if (!hash_put(&primary_hash, request->key, value_copy, value_size, &old_value, &old_value_sz))
 			{
 				log_error("sid %d: Out of memory\n", server_id);
 				free(value_copy);
 				response->status = OUT_OF_SPACE;
+				hash_unlock(&primary_hash, request->key);
 				break;
 			}
 
@@ -332,6 +382,7 @@ static void process_client_message(int fd)
 			replicate_request->hdr.type = MSG_OPERATION_REQ;
 			memcpy(replicate_request->key, request->key, KEY_SIZE);
 			replicate_request->type = OP_PUT;
+			replicate_request->sid = server_id;
 			memcpy(replicate_request->value, value_copy, value_size);
 
 			char recv_buffer[MAX_MSG_LEN] = {0};
@@ -339,6 +390,7 @@ static void process_client_message(int fd)
 			    !recv_msg(secondary_fd, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP))
 			{
 				log_error("sid %d: Replication to %d failed\n", server_id, secondary_sid);
+				hash_unlock(&primary_hash, request->key);
 				return;
 			}
 
@@ -346,6 +398,8 @@ static void process_client_message(int fd)
 			if (old_value != NULL) {
 				free(old_value);
 			}
+
+			hash_unlock(&primary_hash, request->key);
 
 			response->status = SUCCESS;
 			break;
@@ -410,14 +464,19 @@ static bool process_server_message(int fd)
 			void *old_value = NULL;
 			size_t old_value_sz = 0;
 
+			hash_table table = (request->sid == primary_sid) ? primary_hash : secondary_hash;
+
 			// Put the <key, value> pair into the hash table
-			if (!hash_put(&secondary_hash, request->key, value_copy, value_size, &old_value, &old_value_sz))
+			hash_lock(&table, request->key);
+			if (!hash_put(&table, request->key, value_copy, value_size, &old_value, &old_value_sz))
 			{
 				log_error("sid %d: Out of memory\n", server_id);
 				free(value_copy);
 				response->status = OUT_OF_SPACE;
+				hash_unlock(&table, request->key);
 				break;
 			}
+			hash_unlock(&table, request->key);
 
 			// Need to free the old value (if there was any)
 			if (old_value != NULL) {
@@ -470,12 +529,32 @@ static bool process_mserver_message(int fd, bool *shutdown_requested)
 			return true;
 
 		case UPDATE_PRIMARY:
-			//TODO spawn a thread start sending gets too server
-			assert(false);
+			response.status = ((primary_fd = connect_to_server(request->host_name, request->port)) < 0)
+			                ? CTRLREQ_FAILURE : CTRLREQ_SUCCESS;
+
+			if (response.status != CTRLREQ_FAILURE) {
+				update_primary = true;
+				pthread_t sync_primary_thread;
+				pthread_create(&sync_primary_thread, NULL, sync_hashtable, NULL);
+			}
+
 			break;
 
-		// TODO: handle remaining message types
-		// ...
+		case UPDATE_SECONDARY:
+			response.status = ((secondary_fd = connect_to_server(request->host_name, request->port)) < 0)
+			                ? CTRLREQ_FAILURE : CTRLREQ_SUCCESS;
+
+			if (response.status != CTRLREQ_FAILURE) {
+				update_primary = false;
+				pthread_t sync_secondary_thread;
+				pthread_create(&sync_secondary_thread, NULL, sync_hashtable, NULL);
+			}
+
+			break;
+
+		case SWITCH_PRIMARY:
+			assert(false);
+			break;
 
 		default:// impossible
 			assert(false);

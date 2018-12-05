@@ -146,6 +146,7 @@ typedef struct _operation_request {
 	msg_hdr hdr;
 	char key[KEY_SIZE];
 	op_type type;
+	int sid;
 	char value[];
 } __attribute__((packed)) operation_request;
 
