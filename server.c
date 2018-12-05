@@ -154,9 +154,9 @@ void sync_kv(const char key[KEY_SIZE], void *value, size_t value_sz, void *args)
 	(void)args;
 
 	int fd = update_primary ? primary_fd : secondary_fd;
-	hash_table table = update_primary ? primary_hash : secondary_hash;
+	hash_table *table = update_primary ? &primary_hash : &secondary_hash;
 
-	hash_lock(&table, key);
+	hash_lock(table, key);
 
 	char replicate_request_buffer[MAX_MSG_LEN] = {0};
 	operation_request *replicate_request = (operation_request *)replicate_request_buffer;
@@ -172,15 +172,15 @@ void sync_kv(const char key[KEY_SIZE], void *value, size_t value_sz, void *args)
 		log_error("%d sid: asynchronous update failed\n", server_id);
 	}
 
-	hash_unlock(&table, key);
+	hash_unlock(table, key);
 }
 
 void *sync_hashtable(void *args)
 {
 	(void)args;
 
-	hash_table table = update_primary ? primary_hash : secondary_hash;
-	hash_iterate(&table, sync_kv, NULL);
+	hash_table *table = update_primary ? &primary_hash : &secondary_hash;
+	hash_iterate(table, sync_kv, NULL);
 
 	mserver_ctrl_request request = {0};
 	request.hdr.type = MSG_MSERVER_CTRL_REQ;
@@ -231,9 +231,6 @@ static bool init_server()
 	    !hash_init(&secondary_hash, hash_size)) {
 		goto cleanup;
 	}
-
-	// TODO: Create a separate thread that takes care of sending periodic heartbeat messages
-	// ...
 
 	pthread_t heartbeat_thread;
 	if (pthread_create(&heartbeat_thread, NULL, heartbeat, NULL)) {
@@ -309,13 +306,14 @@ static void process_client_message(int fd)
 	response->hdr.type = MSG_OPERATION_RESP;
 	uint16_t value_sz = 0;
 
-	// TODO: extend this function to support replication
-	// Make sure to implement all necessary synchronization. Feel free to use the lock/unlock functions from hash.h.
-	// ...
-
 	// Check that requested key is valid
+	hash_table *table = NULL;
 	int key_srv_id = key_server_id(request->key, num_servers);
-	if (key_srv_id != server_id) {
+	if (key_srv_id == server_id) {
+		table = &primary_hash;
+	} else if (key_srv_id == primary_sid) {
+		table = &secondary_hash;
+	} else {
 		log_error("sid %d: Invalid client key %s sid %d\n", server_id, key_to_str(request->key), key_srv_id);
 		// This sould be considered a server failure (e.g. the metadata server directed a client to the wrong server)
 		response->status = SERVER_FAILURE;
@@ -334,7 +332,7 @@ static void process_client_message(int fd)
 			size_t size = 0;
 
 			// Get the value for requested key from the hash table
-			if (!hash_get(&primary_hash, request->key, &data, &size)) {
+			if (!hash_get(table, request->key, &data, &size)) {
 				log_write("Key %s not found\n", key_to_str(request->key));
 				response->status = KEY_NOT_FOUND;
 				break;
@@ -364,18 +362,15 @@ static void process_client_message(int fd)
 			size_t old_value_sz = 0;
 
 			// Put the <key, value> pair into the hash table
-			hash_lock(&primary_hash, request->key);
-			if (!hash_put(&primary_hash, request->key, value_copy, value_size, &old_value, &old_value_sz))
+			hash_lock(table, request->key);
+			if (!hash_put(table, request->key, value_copy, value_size, &old_value, &old_value_sz))
 			{
 				log_error("sid %d: Out of memory\n", server_id);
 				free(value_copy);
 				response->status = OUT_OF_SPACE;
-				hash_unlock(&primary_hash, request->key);
+				hash_unlock(table, request->key);
 				break;
 			}
-
-			// TODO: forward the PUT request to the secondary replica
-			// ...
 
 			char replicate_request_buffer[MAX_MSG_LEN] = {0};
 			operation_request *replicate_request = (operation_request *)replicate_request_buffer;
@@ -385,12 +380,14 @@ static void process_client_message(int fd)
 			replicate_request->sid = server_id;
 			memcpy(replicate_request->value, value_copy, value_size);
 
+			int fd = (table == &primary_hash) ? secondary_fd : primary_fd;
+
 			char recv_buffer[MAX_MSG_LEN] = {0};
-			if (!send_msg(secondary_fd, replicate_request, sizeof(*replicate_request) + value_size) ||
-			    !recv_msg(secondary_fd, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP))
+			if (!send_msg(fd, replicate_request, sizeof(*replicate_request) + value_size) ||
+			    !recv_msg(fd, recv_buffer, sizeof(recv_buffer), MSG_OPERATION_RESP))
 			{
-				log_error("sid %d: Replication to %d failed\n", server_id, secondary_sid);
-				hash_unlock(&primary_hash, request->key);
+				log_error("sid %d: Replication to %d failed\n", server_id, fd);
+				hash_unlock(table, request->key);
 				return;
 			}
 
@@ -399,7 +396,7 @@ static void process_client_message(int fd)
 				free(old_value);
 			}
 
-			hash_unlock(&primary_hash, request->key);
+			hash_unlock(table, request->key);
 
 			response->status = SUCCESS;
 			break;
@@ -464,19 +461,19 @@ static bool process_server_message(int fd)
 			void *old_value = NULL;
 			size_t old_value_sz = 0;
 
-			hash_table table = (request->sid == primary_sid) ? primary_hash : secondary_hash;
+			hash_table *table = (request->sid == secondary_sid) ? &primary_hash : &secondary_hash;
 
 			// Put the <key, value> pair into the hash table
-			hash_lock(&table, request->key);
-			if (!hash_put(&table, request->key, value_copy, value_size, &old_value, &old_value_sz))
+			hash_lock(table, request->key);
+			if (!hash_put(table, request->key, value_copy, value_size, &old_value, &old_value_sz))
 			{
 				log_error("sid %d: Out of memory\n", server_id);
 				free(value_copy);
 				response->status = OUT_OF_SPACE;
-				hash_unlock(&table, request->key);
+				hash_unlock(table, request->key);
 				break;
 			}
-			hash_unlock(&table, request->key);
+			hash_unlock(table, request->key);
 
 			// Need to free the old value (if there was any)
 			if (old_value != NULL) {

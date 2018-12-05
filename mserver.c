@@ -120,8 +120,7 @@ typedef struct _server_node {
 	// ...
 
 	struct timeval last_heartbeat;
-	//0 if not redirecting, otherwise 1 if redirecting
-	int is_redirecting; 
+	bool is_redirecting; 
 	int primary_conf; //if update primary has finished
 	int secondary_conf; //if update secoundary has finished
 
@@ -391,6 +390,8 @@ static int spawn_server(int sid)
 		return -1;
 	}
 
+	node->is_redirecting = false;
+
 	return 0;
 }
 
@@ -624,7 +625,7 @@ static bool run_mserver_loop()
 					log_error("sid %d: failed to response to UPDATE_PRIMARY\n", i);
 				}
 				
-				server_nodes[i].is_redirecting = 1; //forward all request
+				server_nodes[i].is_redirecting = true;
 
 				request->type = UPDATE_SECONDARY;
 
@@ -637,7 +638,6 @@ static bool run_mserver_loop()
 			}	
 		}
 
-		//TODO ask vlad why why????
 		if (num_ready_fds <= 0) {
 			continue;
 		}
