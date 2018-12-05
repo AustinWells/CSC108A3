@@ -128,6 +128,8 @@ static void cleanup();
 
 static const int hash_size = 65536;
 
+static const int heartbeat_freq = 100000;
+
 void *heartbeat()
 {
 	for (;;) {
@@ -141,7 +143,7 @@ void *heartbeat()
 			log_error("sid %d: Failed to send heartbeat\n", server_id);
 		}
 
-		sleep(1);
+		usleep(heartbeat_freq);
 	}
 
 	pthread_exit(NULL);

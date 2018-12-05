@@ -49,7 +49,7 @@ static uint16_t servers_port = 0;
 static char cfg_file_name[PATH_MAX] = "";
 
 // Timeout for detecting server failures; you might want to adjust this default value
-static const int default_server_timeout = 5;
+static const int default_server_timeout = 500000;
 static int server_timeout = 0;
 
 // Log file name
@@ -609,7 +609,11 @@ static bool run_mserver_loop()
 		struct timeval current_time = {0};
 		gettimeofday(&current_time, NULL);
 		for (int i = 0; i < num_servers; i++) {
-			if ((current_time.tv_sec - server_nodes[i].last_heartbeat.tv_sec) > server_timeout) {
+            struct timeval time_diff = {0};
+            timersub(&current_time, &server_nodes[i].last_heartbeat, &time_diff);
+			if ((time_diff.tv_sec > 0) ||
+                (time_diff.tv_usec > server_timeout)) {
+
 				log_error("Server %d has timed out\n", i);
 
 				FD_CLR(server_nodes[i].socket_fd_in, &allset);
