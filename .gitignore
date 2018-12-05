@@ -50,3 +50,10 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+*.txt
+*.log
+*.py
+*.json
+client
+mserver
+server
