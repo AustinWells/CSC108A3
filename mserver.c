@@ -128,9 +128,6 @@ typedef struct _server_node {
     // Server process PID (it is a child process of mserver)
     pid_t pid;
 
-    // TODO: add fields for necessary additional server state information
-    // ...
-
     struct timeval last_heartbeat;
     bool is_redirecting;
     bool primary_conf;   // if update primary has finished
@@ -521,7 +518,6 @@ static bool process_server_message(int fd) {
     case UPDATED_PRIMARY: {
         server_nodes[failed_server].primary_conf = true;
         if (server_nodes[failed_server].secondary_conf == true) {
-            // TODO send SWITCH-PRIMARY
             server_nodes[failed_server].is_redirecting = false;
             log_write("Server %d has been recovered\n", failed_server);
             failed_server = -1;
@@ -531,7 +527,6 @@ static bool process_server_message(int fd) {
     case UPDATED_SECONDARY: {
         server_nodes[failed_server].secondary_conf = true;
         if (server_nodes[failed_server].primary_conf == true) {
-            // TODO send SWITCH-PRIMARY
             server_nodes[failed_server].is_redirecting = false;
             log_write("Server %d has been recovered\n", failed_server);
             failed_server = -1;
@@ -615,14 +610,6 @@ static bool run_mserver_loop() {
                 }
             }
         }
-
-        // TODO: implement failure detection and recovery
-        // Need to go through the list of servers and figure out which servers
-        // have not sent a heartbeat message yet within the timeout interval.
-        // Keep information in the server_node structure regarding when was the
-        // last heartbeat received from a server and compare to current time.
-        // Initiate recovery if discovered a failure.
-        // ...
 
         struct timeval current_time = {0};
         gettimeofday(&current_time, NULL);

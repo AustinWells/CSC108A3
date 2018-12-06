@@ -297,8 +297,6 @@ static void cleanup() {
 
     hash_iterate(&secondary_hash, clean_iterator_f, NULL);
     hash_cleanup(&secondary_hash);
-    // TODO: release all other resources
-    // ...
 }
 
 // Connection will be closed after calling this function regardless of result
@@ -444,9 +442,6 @@ static bool process_server_message(int fd) {
         return false;
     }
 
-    // TODO: process the message and send the response
-    // ...
-
     // Initialize the response
     char resp_buffer[MAX_MSG_LEN] = {0};
     operation_response *response = (operation_response *)resp_buffer;
@@ -572,10 +567,6 @@ static bool process_mserver_message(int fd, bool *shutdown_requested) {
 
         break;
 
-    case SWITCH_PRIMARY:
-        assert(false);
-        break;
-
     default: // impossible
         assert(false);
         break;
@@ -599,9 +590,6 @@ static bool run_server_loop() {
     // Server sits in an infinite loop waiting for incoming connections from
     // mserver/clients and for incoming messages from already connected
     // mserver/clients
-    //
-    // TODO: process connections and messages from other servers as well
-    // ...
 
     for (;;) {
         rset = allset;
